@@ -1,6 +1,6 @@
-# Versions installed in the validated run; Python version is in .python-version
+# Python 3.14 development environment; preprocessing equivalence to the Python 3.12 validated run is not yet fully verified
 numpy==2.3.5
-pandas==2.2.3
+pandas==2.3.3
 python-dateutil==4.0.0
 pytz==2026.6
 tzdata==2026.6
