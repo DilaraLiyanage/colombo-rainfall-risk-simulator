@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from holdout_simulation_preflight import (
     evaluation_dates,
+    evaluation_thresholds,
     validate_five_year_results,
     EXPECTED_DAYS,
 )
@@ -204,6 +205,60 @@ class HoldoutSimulationPreflightTests(unittest.TestCase):
         result = valid_annual_synthetic_result()
         result["yearly_total_mm"][0, 0] = np.nan
         assert_invalid_annual_result(self, result)
+
+
+    def test_calibration_defined_thresholds(self):
+        """Check five thresholds using artificial wet-day rainfall."""
+        wet = np.linspace(1.0, 100.0, 1000)
+        rainfall = np.concatenate(([0.0, 0.5], wet))
+
+        thresholds = evaluation_thresholds(rainfall)
+
+        q99, q995 = np.quantile(
+            wet, [0.99, 0.995], method="linear"
+        )
+
+        self.assertEqual(len(thresholds), 5)
+        self.assertEqual(thresholds[0], 50.0)
+        self.assertAlmostEqual(thresholds[1], q99)
+        self.assertAlmostEqual(thresholds[2], q995)
+        self.assertEqual(thresholds[3], 100.0)
+        self.assertEqual(thresholds[4], 150.0)
+
+        self.assertEqual(
+            thresholds,
+            tuple(sorted(thresholds)),
+        )
+
+    def test_calibration_thresholds_exclude_dry_days(self):
+        """Adding dry days must not change wet-day percentiles."""
+        wet = np.linspace(1.0, 100.0, 1000)
+
+        original = evaluation_thresholds(wet)
+
+        with_dry_days = evaluation_thresholds(
+            np.concatenate(
+                (np.zeros(500), np.full(200, 0.5), wet)
+            )
+        )
+
+        self.assertEqual(original, with_dry_days)
+
+    def test_rejects_invalid_calibration_threshold_input(self):
+        """Reject invalid rainfall before calculating thresholds."""
+        invalid_cases = (
+            [],
+            [0.0, 0.5],
+            [-1.0, 50.0, 100.0],
+            [1.0, np.nan, 100.0],
+            [1.0, np.inf, 100.0],
+            [[1.0, 2.0], [3.0, 4.0]],
+        )
+
+        for rainfall in invalid_cases:
+            with self.subTest(rainfall=rainfall):
+                with self.assertRaises(ValueError):
+                    evaluation_thresholds(rainfall)
 
 
 if __name__ == "__main__":

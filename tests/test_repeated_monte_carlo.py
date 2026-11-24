@@ -716,5 +716,151 @@ class RepeatedMonteCarloTests(unittest.TestCase):
         )
 
 
+    def test_custom_extreme_thresholds(self):
+        """Custom event thresholds must preserve rainfall generation."""
+        from datetime import date
+
+        from monte_carlo_simulator import synthetic_dates
+        from repeated_monte_carlo import simulate_many
+
+        occurrence = {
+            "ALL": {
+                "probabilities": {
+                    "P00": 0.35,
+                    "P01": 0.65,
+                    "P10": 0.15,
+                    "P11": 0.85,
+                }
+            }
+        }
+
+        common = dict(
+            dates=synthetic_dates(date(2027, 1, 1), 30),
+            occurrence_name="B1",
+            occurrence_parameters=occurrence,
+            intensity_name="A1",
+            intensity_parameters={
+                "threshold_mm": 1.0,
+                "shape": 1.5,
+                "scale": 8.0,
+            },
+            dry_amounts=[0.0, 0.3, 0.7],
+            initial_wet_probability=0.75,
+            n_replications=100,
+            seed=20261124,
+            include_annual_metrics=True,
+        )
+
+        original = simulate_many(**common)
+
+        custom = simulate_many(
+            **common,
+            extreme_thresholds=(
+                50.0,
+                55.0,
+                75.0,
+                100.0,
+                150.0,
+            ),
+        )
+
+        # Adding thresholds must not change rainfall generation.
+        for key in (
+            "annual_total_mm",
+            "annual_maximum_mm",
+            "annual_wet_days",
+        ):
+            np.testing.assert_array_equal(
+                original[key],
+                custom[key],
+            )
+
+        self.assertEqual(
+            set(custom["extreme_counts"]),
+            {50.0, 55.0, 75.0, 100.0, 150.0},
+        )
+
+        self.assertEqual(
+            set(custom["yearly_extreme_counts"]),
+            {50.0, 55.0, 75.0, 100.0, 150.0},
+        )
+
+        # Higher thresholds cannot have more exceedances.
+        thresholds = sorted(custom["extreme_counts"])
+
+        for lower, higher in zip(
+            thresholds[:-1], thresholds[1:]
+        ):
+            self.assertTrue(
+                np.all(
+                    custom["extreme_counts"][higher]
+                    <= custom["extreme_counts"][lower]
+                )
+            )
+
+        for threshold in thresholds:
+            np.testing.assert_array_equal(
+                custom["yearly_extreme_counts"][
+                    threshold
+                ].sum(axis=1),
+                custom["extreme_counts"][threshold],
+            )
+
+
+    def test_invalid_custom_extreme_thresholds(self):
+        """Reject invalid custom extreme-event thresholds."""
+        from datetime import date
+
+        from monte_carlo_simulator import synthetic_dates
+        from repeated_monte_carlo import simulate_many
+
+        occurrence = {
+            "ALL": {
+                "probabilities": {
+                    "P00": 0.35,
+                    "P01": 0.65,
+                    "P10": 0.15,
+                    "P11": 0.85,
+                }
+            }
+        }
+
+        common = dict(
+            dates=synthetic_dates(date(2027, 1, 1), 10),
+            occurrence_name="B1",
+            occurrence_parameters=occurrence,
+            intensity_name="A1",
+            intensity_parameters={
+                "threshold_mm": 1.0,
+                "shape": 1.5,
+                "scale": 8.0,
+            },
+            dry_amounts=[0.0, 0.3, 0.7],
+            initial_wet_probability=0.75,
+            n_replications=20,
+            seed=20261124,
+        )
+
+        invalid_cases = {
+            "empty": (),
+            "below wet threshold": (0.5, 50.0),
+            "negative": (-1.0, 50.0),
+            "duplicate": (50.0, 50.0),
+            "unsorted": (100.0, 50.0),
+            "NaN": (50.0, float("nan")),
+            "infinity": (50.0, float("inf")),
+            "nonnumeric": ("invalid", 50.0),
+            "noniterable": 50.0,
+        }
+
+        for label, thresholds in invalid_cases.items():
+            with self.subTest(case=label):
+                with self.assertRaises(ValueError):
+                    simulate_many(
+                        **common,
+                        extreme_thresholds=thresholds,
+                    )
+
+
 if __name__ == "__main__":
     unittest.main()

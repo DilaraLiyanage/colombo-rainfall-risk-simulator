@@ -89,6 +89,7 @@ def sample_wet_batch(name, parameters, rng, count):
     return values
 
 
+
 def simulate_many(
     dates,
     occurrence_name,
@@ -100,7 +101,9 @@ def simulate_many(
     n_replications,
     seed,
     include_annual_metrics=False,
+    extreme_thresholds=None,
 ):
+
 
     """Simulate independent synthetic paths in vectorized batches.
 
@@ -108,6 +111,35 @@ def simulate_many(
     replications simultaneously. No observed future states are used.
     """
     validate_simulation_dates(dates)
+
+
+    # Default to the three previously verified thresholds.
+    if extreme_thresholds is None:
+        thresholds = EXTREME_THRESHOLDS
+    else:
+        try:
+            thresholds = tuple(
+                float(value) for value in extreme_thresholds
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "Extreme thresholds must be numeric"
+            ) from exc
+
+        if (
+            not thresholds
+            or not all(
+                math.isfinite(value) and value >= WET_THRESHOLD_MM
+                for value in thresholds
+            )
+            or len(set(thresholds)) != len(thresholds)
+            or tuple(sorted(thresholds)) != thresholds
+        ):
+            raise ValueError(
+                "Extreme thresholds must be finite, unique, "
+                "sorted, and >= 1.0 mm"
+            )
+
 
     if type(n_replications) is not int or n_replications < 2:
         raise ValueError("At least two replications are required")
@@ -142,7 +174,7 @@ def simulate_many(
 
     extreme_counts = {
         threshold: np.zeros(n, dtype=np.int32)
-        for threshold in EXTREME_THRESHOLDS
+        for threshold in thresholds
     }
 
 
@@ -171,7 +203,7 @@ def simulate_many(
             threshold: np.zeros(
                 annual_shape, dtype=np.int32
             )
-            for threshold in EXTREME_THRESHOLDS
+            for threshold in thresholds
         }
 
     for day_index, day in enumerate(dates):
@@ -230,7 +262,7 @@ def simulate_many(
         maxima = np.maximum(maxima, amounts)
         wet_days += states
 
-        for threshold in EXTREME_THRESHOLDS:
+        for threshold in thresholds:
             extreme_counts[threshold] += (
                 amounts >= threshold
             )
@@ -247,7 +279,7 @@ def simulate_many(
 
             annual_wet_days[:, year_index] += states
 
-            for threshold in EXTREME_THRESHOLDS:
+            for threshold in thresholds:
                 annual_extreme_counts[threshold][
                     :, year_index
                 ] += (amounts >= threshold)
@@ -434,12 +466,14 @@ def main():
         )
         print(f"SD annual rainfall: {totals['sd']:.2f} mm")
         print(f"Mean wet days: {wet_days['mean']:.2f}")
+
         print(f"Mean annual maximum: {maxima['mean']:.2f} mm")
 
         print("\nExtreme rainfall events per synthetic year:")
 
         for threshold in EXTREME_THRESHOLDS:
             counts = results["extreme_counts"][threshold]
+
 
             expected_count = mean_statistics(counts)
             event_probability = event_probability_statistics(counts)

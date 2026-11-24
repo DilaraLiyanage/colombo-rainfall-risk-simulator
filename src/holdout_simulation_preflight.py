@@ -36,10 +36,55 @@ from repeated_monte_carlo import (
 )
 
 
+
 HOLDOUT_START = date(2021, 1, 1)
 HOLDOUT_END = date(2025, 12, 31)
 EXPECTED_DAYS = 1826
 WET_THRESHOLD_MM = 1.0
+
+def evaluation_thresholds(calibration_rainfall):
+    """Calculate the five predefined extreme-event thresholds.
+
+    Percentile thresholds use wet-day rainfall from calibration
+    exclusively, with NumPy's default linear quantile method.
+    """
+    rainfall = np.asarray(calibration_rainfall, dtype=float)
+
+    if (
+        rainfall.ndim != 1
+        or rainfall.size == 0
+        or not np.all(np.isfinite(rainfall))
+        or np.any(rainfall < 0)
+    ):
+        raise ValueError("Invalid calibration rainfall")
+
+    wet_amounts = rainfall[rainfall >= WET_THRESHOLD_MM]
+
+    if wet_amounts.size < 2:
+        raise ValueError(
+            "At least two wet-day observations are required"
+        )
+
+    percentile_99, percentile_995 = np.quantile(
+        wet_amounts,
+        [0.99, 0.995],
+        method="linear",
+    )
+
+    thresholds = tuple(sorted((
+        50.0,
+        float(percentile_99),
+        float(percentile_995),
+        100.0,
+        150.0,
+    )))
+
+    if len(set(thresholds)) != 5:
+        raise ValueError(
+            "Calibration thresholds must be distinct"
+        )
+
+    return thresholds
 
 
 def evaluation_dates():
@@ -57,7 +102,7 @@ def evaluation_dates():
     return dates
 
 
-def validate_five_year_results(result):
+def validate_five_year_results(result, thresholds=EXTREME_THRESHOLDS):
     """Check dimensions and internal consistency of simulation output."""
     n = result["n_replications"]
 
@@ -86,7 +131,7 @@ def validate_five_year_results(result):
 
     previous_counts = None
 
-    for threshold in EXTREME_THRESHOLDS:
+    for threshold in thresholds:
         counts = np.asarray(result["extreme_counts"][threshold])
 
         if (
@@ -154,7 +199,7 @@ def validate_five_year_results(result):
 
             yearly_counts = result["yearly_extreme_counts"]
 
-            for threshold in EXTREME_THRESHOLDS:
+            for threshold in thresholds:
                 values = np.asarray(yearly_counts[threshold])
 
                 if (
@@ -195,6 +240,13 @@ def main():
         or calibration_dates[-1] != date(2020, 12, 31)
     ):
         raise RuntimeError("Incorrect calibration period")
+
+    # Predefined thresholds using calibration rainfall only.
+    thresholds = evaluation_thresholds(rainfall)
+
+    print("\nFive predefined extreme-rainfall thresholds (mm):")
+    for threshold in thresholds:
+        print(f"  {threshold:.12f}")
 
     states = classify_days(rainfall)
 
@@ -245,9 +297,10 @@ def main():
             n_replications=N_REPLICATIONS,
             seed=np.random.SeedSequence([BASE_SEED, index]),
             include_annual_metrics=True,
+            extreme_thresholds=thresholds,
         )
 
-        validate_five_year_results(results)
+        validate_five_year_results(results, thresholds=thresholds)
 
         totals = mean_statistics(results["annual_total_mm"])
         maxima = mean_statistics(results["annual_maximum_mm"])
@@ -264,29 +317,33 @@ def main():
         print(f"Mean five-year wet days: {wet_days['mean']:.2f}")
         print(f"Mean five-year maximum daily rainfall: {maxima['mean']:.2f} mm")
 
-        for threshold in EXTREME_THRESHOLDS:
+        for threshold in thresholds:
             counts = results["extreme_counts"][threshold]
             count_stats = mean_statistics(counts)
             probability = event_probability_statistics(counts)
 
             print(
-                f"  >= {threshold:.0f} mm: "
+                f"  >= {threshold:.6f} mm: "
                 f"mean five-year count={count_stats['mean']:.3f}, "
                 f"P(at least one in five years)="
                 f"{probability['probability']:.2%}"
             )
 
 
+
         print("\nAnnual synthetic rainfall summary:")
-        print(
+
+        header = (
             f"{'Year':<8}"
             f"{'Mean total (mm)':>18}"
             f"{'Mean wet days':>17}"
             f"{'Mean max (mm)':>17}"
-            f"{'>=50':>10}"
-            f"{'>=100':>10}"
-            f"{'>=150':>10}"
         )
+
+        for threshold in thresholds:
+            header += f"{'>=' + format(threshold, '.6f'):>16}"
+
+        print(header)
 
         for year_index, year in enumerate(results["years"]):
             mean_total = np.mean(
@@ -305,18 +362,21 @@ def main():
                         :, year_index
                     ]
                 )
-                for threshold in EXTREME_THRESHOLDS
+                for threshold in thresholds
             }
 
-            print(
+            row = (
                 f"{year:<8}"
                 f"{mean_total:>18.2f}"
                 f"{mean_wet:>17.2f}"
                 f"{mean_max:>17.2f}"
-                f"{mean_extremes[50.0]:>10.3f}"
-                f"{mean_extremes[100.0]:>10.3f}"
-                f"{mean_extremes[150.0]:>10.3f}"
             )
+
+            for threshold in thresholds:
+                row += f"{mean_extremes[threshold]:>16.3f}"
+
+            print(row)
+
 
         mean_annual_sd = np.mean(
             results["annual_total_sd_mm"]
