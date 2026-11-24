@@ -99,7 +99,9 @@ def simulate_many(
     initial_wet_probability,
     n_replications,
     seed,
+    include_annual_metrics=False,
 ):
+
     """Simulate independent synthetic paths in vectorized batches.
 
     Markov states are updated sequentially by day, but across all
@@ -142,6 +144,35 @@ def simulate_many(
         threshold: np.zeros(n, dtype=np.int32)
         for threshold in EXTREME_THRESHOLDS
     }
+
+
+    # Track annual statistics without storing daily rainfall paths.
+    if include_annual_metrics:
+        years = tuple(sorted({day.year for day in dates}))
+
+        year_to_index = {
+            year: index
+            for index, year in enumerate(years)
+        }
+
+        annual_shape = (n, len(years))
+
+        annual_totals = np.zeros(
+            annual_shape, dtype=float
+        )
+        annual_maxima = np.zeros(
+            annual_shape, dtype=float
+        )
+        annual_wet_days = np.zeros(
+            annual_shape, dtype=np.int32
+        )
+
+        annual_extreme_counts = {
+            threshold: np.zeros(
+                annual_shape, dtype=np.int32
+            )
+            for threshold in EXTREME_THRESHOLDS
+        }
 
     for day_index, day in enumerate(dates):
         if day_index == 0:
@@ -204,9 +235,27 @@ def simulate_many(
                 amounts >= threshold
             )
 
+        if include_annual_metrics:
+            year_index = year_to_index[day.year]
+
+            annual_totals[:, year_index] += amounts
+
+            annual_maxima[:, year_index] = np.maximum(
+                annual_maxima[:, year_index],
+                amounts,
+            )
+
+            annual_wet_days[:, year_index] += states
+
+            for threshold in EXTREME_THRESHOLDS:
+                annual_extreme_counts[threshold][
+                    :, year_index
+                ] += (amounts >= threshold)
+
         previous = states
 
-    return {
+
+    result = {
         "annual_total_mm": totals,
         "annual_maximum_mm": maxima,
         "annual_wet_days": wet_days,
@@ -214,6 +263,21 @@ def simulate_many(
         "n_replications": n,
         "days_per_path": len(dates),
     }
+
+    if include_annual_metrics:
+        result["years"] = years
+        result["yearly_total_mm"] = annual_totals
+        result["yearly_maximum_mm"] = annual_maxima
+        result["yearly_wet_days"] = annual_wet_days
+        result["yearly_extreme_counts"] = annual_extreme_counts
+
+        result["annual_total_sd_mm"] = (
+            np.std(annual_totals, axis=1, ddof=1)
+            if len(years) >= 2
+            else np.full(n, np.nan)
+        )
+
+    return result
 
 
 def mean_statistics(values):

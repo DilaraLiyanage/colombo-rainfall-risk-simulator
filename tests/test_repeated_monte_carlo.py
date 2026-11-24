@@ -493,6 +493,228 @@ class RepeatedMonteCarloTests(unittest.TestCase):
         )
 
 
+    def test_annual_tracking_preserves_simulation(self):
+        """Annual tracking must not change simulated random outcomes."""
+        from datetime import date
+
+        from repeated_monte_carlo import simulate_many
+        from monte_carlo_simulator import synthetic_dates
+
+        dates = synthetic_dates(date(2023, 12, 28), 10)
+
+        occurrence = {
+            "probabilities": {
+                "P00": 0.35,
+                "P01": 0.65,
+                "P10": 0.15,
+                "P11": 0.85,
+            }
+        }
+
+        intensity = {
+            "threshold_mm": 1.0,
+            "shape": 1.5,
+            "scale": 8.0,
+        }
+
+        common = dict(
+            dates=dates,
+            occurrence_name="B1",
+            occurrence_parameters={"ALL": occurrence},
+            intensity_name="A1",
+            intensity_parameters=intensity,
+            dry_amounts=[0.0, 0.2, 0.8],
+            initial_wet_probability=0.75,
+            n_replications=100,
+            seed=20261124,
+        )
+
+        original = simulate_many(**common)
+        tracked = simulate_many(
+            **common,
+            include_annual_metrics=True,
+        )
+
+        np.testing.assert_array_equal(
+            original["annual_total_mm"],
+            tracked["annual_total_mm"],
+        )
+        np.testing.assert_array_equal(
+            original["annual_maximum_mm"],
+            tracked["annual_maximum_mm"],
+        )
+        np.testing.assert_array_equal(
+            original["annual_wet_days"],
+            tracked["annual_wet_days"],
+        )
+
+        for threshold in original["extreme_counts"]:
+            np.testing.assert_array_equal(
+                original["extreme_counts"][threshold],
+                tracked["extreme_counts"][threshold],
+            )
+
+        self.assertEqual(tracked["years"], (2023, 2024))
+
+        np.testing.assert_allclose(
+            np.sum(tracked["yearly_total_mm"], axis=1),
+            tracked["annual_total_mm"],
+            rtol=1e-12,
+            atol=1e-9,
+        )
+
+        np.testing.assert_array_equal(
+            np.sum(tracked["yearly_wet_days"], axis=1),
+            tracked["annual_wet_days"],
+        )
+
+        np.testing.assert_array_equal(
+            np.max(tracked["yearly_maximum_mm"], axis=1),
+            tracked["annual_maximum_mm"],
+        )
+
+        for threshold, yearly in tracked[
+            "yearly_extreme_counts"
+        ].items():
+            np.testing.assert_array_equal(
+                np.sum(yearly, axis=1),
+                tracked["extreme_counts"][threshold],
+            )
+
+        np.testing.assert_allclose(
+            tracked["annual_total_sd_mm"],
+            np.std(
+                tracked["yearly_total_mm"],
+                axis=1,
+                ddof=1,
+            ),
+        )
+
+
+    def test_five_year_annual_tracking(self):
+        """Verify annual and five-year consistency across 2021-2025."""
+        from datetime import date
+
+        from monte_carlo_simulator import synthetic_dates
+        from repeated_monte_carlo import simulate_many
+
+        dates = synthetic_dates(date(2021, 1, 1), 1826)
+
+        occurrence = {
+            "ALL": {
+                "probabilities": {
+                    "P00": 0.35,
+                    "P01": 0.65,
+                    "P10": 0.15,
+                    "P11": 0.85,
+                }
+            }
+        }
+
+        intensity = {
+            "threshold_mm": 1.0,
+            "shape": 1.5,
+            "scale": 8.0,
+        }
+
+        common = dict(
+            dates=dates,
+            occurrence_name="B1",
+            occurrence_parameters=occurrence,
+            intensity_name="A1",
+            intensity_parameters=intensity,
+            dry_amounts=[0.0, 0.2, 0.8],
+            initial_wet_probability=0.75,
+            n_replications=50,
+            seed=20261124,
+        )
+
+        original = simulate_many(**common)
+        tracked = simulate_many(
+            **common,
+            include_annual_metrics=True,
+        )
+
+        self.assertEqual(
+            tracked["years"],
+            (2021, 2022, 2023, 2024, 2025),
+        )
+
+        self.assertEqual(
+            tracked["yearly_total_mm"].shape,
+            (50, 5),
+        )
+
+        self.assertEqual(
+            tracked["yearly_wet_days"].shape,
+            (50, 5),
+        )
+
+        self.assertEqual(
+            tracked["yearly_maximum_mm"].shape,
+            (50, 5),
+        )
+
+        # Annual tracking must not change the random simulation.
+        for key in (
+            "annual_total_mm",
+            "annual_maximum_mm",
+            "annual_wet_days",
+        ):
+            np.testing.assert_array_equal(
+                original[key],
+                tracked[key],
+            )
+
+        # Five-year totals must equal the sum of yearly totals.
+        np.testing.assert_allclose(
+            tracked["yearly_total_mm"].sum(axis=1),
+            tracked["annual_total_mm"],
+            rtol=1e-12,
+            atol=1e-8,
+        )
+
+        np.testing.assert_array_equal(
+            tracked["yearly_wet_days"].sum(axis=1),
+            tracked["annual_wet_days"],
+        )
+
+        np.testing.assert_array_equal(
+            tracked["yearly_maximum_mm"].max(axis=1),
+            tracked["annual_maximum_mm"],
+        )
+
+        for threshold, counts in tracked[
+            "yearly_extreme_counts"
+        ].items():
+            self.assertEqual(counts.shape, (50, 5))
+
+            np.testing.assert_array_equal(
+                counts.sum(axis=1),
+                tracked["extreme_counts"][threshold],
+            )
+
+        # Each year must obey its own calendar-day limit.
+        days_per_year = [365, 365, 365, 366, 365]
+
+        for index, days in enumerate(days_per_year):
+            self.assertTrue(
+                np.all(
+                    tracked["yearly_wet_days"][:, index]
+                    <= days
+                )
+            )
+
+        # Annual variability uses sample SD across five years.
+        np.testing.assert_allclose(
+            tracked["annual_total_sd_mm"],
+            np.std(
+                tracked["yearly_total_mm"],
+                axis=1,
+                ddof=1,
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
